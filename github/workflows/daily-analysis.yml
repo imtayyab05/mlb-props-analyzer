@@ -1,0 +1,97 @@
+name: Daily MLB Props Analysis
+
+on:
+  schedule:
+    # Runs daily at 8:00 PM UTC (adjust timezone as needed)
+    # For EST (UTC-5): use '0 1 * * *' for 8 PM EST
+    # For PST (UTC-8): use '0 4 * * *' for 8 PM PST  
+    # For CST (UTC-6): use '0 2 * * *' for 8 PM CST
+    - cron: '0 20 * * *'
+  workflow_dispatch: # Allows manual triggering from GitHub UI
+
+jobs:
+  analyze-props:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300  # 5 hour timeout
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run MLB Props Analysis
+      env:
+        ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      run: |
+        cd src
+        python mlb_props_analyzer.py
+        
+    - name: List generated files
+      run: |
+        echo "Generated files:"
+        ls -la src/*.xlsx || echo "No Excel files found"
+        
+    - name: Upload analysis results as artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: mlb-props-analysis-${{ github.run_number }}
+        path: src/*.xlsx
+        retention-days: 30
+        if-no-files-found: error
+        
+    - name: Commit and push results to repository
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Add timestamp to commit message
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+        
+        # Add Excel files if they exist
+        if ls src/*.xlsx 1> /dev/null 2>&1; then
+          git add src/*.xlsx
+          git commit -m "📊 Daily MLB props analysis - $TIMESTAMP" || echo "No changes to commit"
+          git push || echo "Nothing to push"
+        else
+          echo "No Excel files to commit"
+        fi
+        
+    - name: Create release with files (optional)
+      if: success()
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: daily-${{ github.run_number }}
+        name: Daily Analysis ${{ github.run_number }}
+        body: |
+          🏀 Daily MLB Props Analysis Results
+          
+          📅 Generated on: ${{ github.event.head_commit.timestamp }}
+          🔄 Run number: ${{ github.run_number }}
+          
+          📊 Files included:
+          - `mlb_props_YYYYMMDD_HHMM.xlsx` - Raw props data
+          - `MLB_Props_Cheat_Sheets_YYYYMMDD_HHMM.xlsx` - Analysis results
+          
+          💡 Download the files from the Assets section below!
+        files: src/*.xlsx
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
